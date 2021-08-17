@@ -431,7 +431,7 @@ class FastRCNNOutputLayers(nn.Module):
         proposal_deltas = self.bbox_pred(x)
         return scores, proposal_deltas
 
-    def losses(self, predictions, proposals):
+    def losses(self, predictions, proposals,ohem=None):
         """
         Args:
             predictions: return values of :meth:`forward()`.
@@ -465,8 +465,17 @@ class FastRCNNOutputLayers(nn.Module):
         else:
             proposal_boxes = gt_boxes = torch.empty((0, 4), device=proposal_deltas.device)
 
-        losses = {
+        if ohem is None:
+            losses = {
             "loss_cls": cross_entropy(scores, gt_classes, reduction="mean"),
+            "loss_box_reg": self.box_reg_loss(
+                proposal_boxes, gt_boxes, proposal_deltas, gt_classes
+            ),
+        }
+        else:
+            #changed reduction mode to none to get loss per proposal
+            losses = {
+            "loss_cls": cross_entropy(scores, gt_classes, reduction="none"),
             "loss_box_reg": self.box_reg_loss(
                 proposal_boxes, gt_boxes, proposal_deltas, gt_classes
             ),

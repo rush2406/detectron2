@@ -20,6 +20,7 @@ from ..sampling import subsample_labels
 from .box_head import build_box_head
 from .fast_rcnn import FastRCNNOutputLayers
 from .keypoint_head import build_keypoint_head
+from detectron2.layers import batched_nms
 from .mask_head import build_mask_head
 
 ROI_HEADS_REGISTRY = Registry("ROI_HEADS")
@@ -177,9 +178,55 @@ class ROIHeads(torch.nn.Module):
                 allow_low_quality_matches=False,
             ),
         }
+    def apply_ohem(self,sampled_idxs,gt_classes,has_gt,proposals_per_image, targets_per_image,matched_idxs,features,img_idx,nms_thresh=0.5):
+
+        proposals_with_gt = []
+
+        proposals_per_image = proposals_per_image[sampled_idxs]
+        proposals_per_image.gt_classes = gt_classes
+
+        # We index all the attributes of targets that start with "gt_"
+        # and have not been added to proposals yet (="gt_classes").
+        if has_gt:
+            sampled_targets = matched_idxs[sampled_idxs]
+            # NOTE: here the indexing waste some compute, because heads
+            # like masks, keypoints, etc, will filter the proposals again,
+            # (by foreground/background, or number of keypoints in the image, etc)
+            # so we essentially index the data twice.
+            for (trg_name, trg_value) in targets_per_image.get_fields().items():
+                if trg_name.startswith("gt_") and not proposals_per_image.has(trg_name):
+                    proposals_per_image.set(trg_name, trg_value[sampled_targets])
+        else:
+            gt_boxes = Boxes(
+                targets_per_image.gt_boxes.tensor.new_zeros((len(sampled_idxs), 4))
+            )
+            proposals_per_image.gt_boxes = gt_boxes
+
+        proposals_with_gt.append(proposals_per_image)
+
+        proposal_boxes = [x.proposal_boxes for x in proposals_with_gt]
+        #get features corresponding to image
+        box_features = self._shared_roi_transform(
+            [torch.unsqueeze(features[f][img_idx],0) for f in self.in_features], proposal_boxes
+        )
+        input_features = box_features.mean(dim=[2, 3])
+        predictions = self.box_predictor(input_features)
+
+        #calculating loss per proposal
+        with torch.no_grad():
+            loss_dict = self.box_predictor.losses(predictions, proposals_with_gt,'ohem')
+            total_loss = loss_dict['loss_cls']
+
+            x = proposals_with_gt[0]
+
+            keep = batched_nms((x.proposal_boxes).tensor, total_loss, x.gt_classes, nms_thresh)
+            sample_sorted_idxs = sampled_idxs[keep]
+
+            #choosing 64 hard proposals per image
+            return sample_sorted_idxs[:64]
 
     def _sample_proposals(
-        self, matched_idxs: torch.Tensor, matched_labels: torch.Tensor, gt_classes: torch.Tensor
+        self, matched_idxs: torch.Tensor, matched_labels: torch.Tensor, gt_classes: torch.Tensor, has_gt, proposals_per_image,targets_per_image,features,img_idx
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Based on the matching between N proposals and M groundtruth,
@@ -214,6 +261,11 @@ class ROIHeads(torch.nn.Module):
         )
 
         sampled_idxs = torch.cat([sampled_fg_idxs, sampled_bg_idxs], dim=0)
+
+        sampled_idxs = self.apply_ohem(sampled_idxs,gt_classes[sampled_idxs],has_gt,proposals_per_image, targets_per_image,matched_idxs,features,img_idx)
+       
+        gt_classes_ss = gt_classes[sampled_idxs]
+
         return sampled_idxs, gt_classes[sampled_idxs]
 
     @torch.no_grad()
@@ -261,6 +313,7 @@ class ROIHeads(torch.nn.Module):
 
         num_fg_samples = []
         num_bg_samples = []
+        img_idx=0
         for proposals_per_image, targets_per_image in zip(proposals, targets):
             has_gt = len(targets_per_image) > 0
             match_quality_matrix = pairwise_iou(
@@ -268,7 +321,7 @@ class ROIHeads(torch.nn.Module):
             )
             matched_idxs, matched_labels = self.proposal_matcher(match_quality_matrix)
             sampled_idxs, gt_classes = self._sample_proposals(
-                matched_idxs, matched_labels, targets_per_image.gt_classes
+                matched_idxs, matched_labels, targets_per_image.gt_classes, has_gt,proposals_per_image, targets_per_image, features, img_idx
             )
 
             # Set target attributes of the sampled proposals:
@@ -293,6 +346,7 @@ class ROIHeads(torch.nn.Module):
             num_bg_samples.append((gt_classes == self.num_classes).sum().item())
             num_fg_samples.append(gt_classes.numel() - num_bg_samples[-1])
             proposals_with_gt.append(proposals_per_image)
+            img_idx = img_idx+1
 
         # Log the number of fg/bg samples that are selected for training ROI heads
         storage = get_event_storage()
