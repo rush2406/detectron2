@@ -277,6 +277,7 @@ _C.MODEL.ROI_HEADS.NMS_THRESH_TEST = 0.5
 # train ROI heads.
 _C.MODEL.ROI_HEADS.PROPOSAL_APPEND_GT = True
 
+#flag to enable OHEM (online hard example mining)
 _C.MODEL.ROI_HEADS.OHEM = False
 
 # ---------------------------------------------------------------------------- #
