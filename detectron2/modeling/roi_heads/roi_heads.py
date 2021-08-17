@@ -177,6 +177,7 @@ class ROIHeads(torch.nn.Module):
                 cfg.MODEL.ROI_HEADS.IOU_LABELS,
                 allow_low_quality_matches=False,
             ),
+            "ohem": cfg.MODEL.ROI_HEADS.OHEM
         }
     def apply_ohem(self,sampled_idxs,gt_classes,has_gt,proposals_per_image, targets_per_image,matched_idxs,features,img_idx,nms_thresh=0.5):
 
@@ -256,14 +257,19 @@ class ROIHeads(torch.nn.Module):
         else:
             gt_classes = torch.zeros_like(matched_idxs) + self.num_classes
 
-        sampled_fg_idxs, sampled_bg_idxs = subsample_labels(
-            gt_classes, self.batch_size_per_image, self.positive_fraction, self.num_classes
-        )
+        if self.ohem:
+            sampled_fg_idxs, sampled_bg_idxs = subsample_labels(
+            gt_classes, self.batch_size_per_image, self.positive_fraction, self.num_classes,'ohem')
 
-        sampled_idxs = torch.cat([sampled_fg_idxs, sampled_bg_idxs], dim=0)
+            sampled_idxs = torch.cat([sampled_fg_idxs, sampled_bg_idxs], dim=0)
 
-        sampled_idxs = self.apply_ohem(sampled_idxs,gt_classes[sampled_idxs],has_gt,proposals_per_image, targets_per_image,matched_idxs,features,img_idx)
-       
+            sampled_idxs = self.apply_ohem(sampled_idxs,gt_classes[sampled_idxs],has_gt,proposals_per_image, targets_per_image,matched_idxs,features,img_idx)
+
+        else:
+            sampled_fg_idxs, sampled_bg_idxs = subsample_labels(gt_classes, self.batch_size_per_image, self.positive_fraction, self.num_classes,'ohem')
+
+            sampled_idxs = torch.cat([sampled_fg_idxs, sampled_bg_idxs], dim=0)
+        
         gt_classes_ss = gt_classes[sampled_idxs]
 
         return sampled_idxs, gt_classes[sampled_idxs]

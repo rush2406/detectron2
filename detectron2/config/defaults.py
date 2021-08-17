@@ -277,6 +277,8 @@ _C.MODEL.ROI_HEADS.NMS_THRESH_TEST = 0.5
 # train ROI heads.
 _C.MODEL.ROI_HEADS.PROPOSAL_APPEND_GT = True
 
+_C.MODEL.ROI_HEADS.OHEM = False
+
 # ---------------------------------------------------------------------------- #
 # Box Head
 # ---------------------------------------------------------------------------- #
